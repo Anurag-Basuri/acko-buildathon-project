@@ -46,9 +46,8 @@ We analyzed leading industry solutions to inform Contract Guard's design:
 
 ---
 
-## 4. Scope & Feature Prioritization (Must-Haves vs. Out-of-Scope)
+## 4. Scope & Features
 
-### Core Scope: Must-Haves (Build Today)
 1. **Service & Version Registry:**
    - Register provider services (`quote-api`, `policy-api`, `claims-api`) with owner team metadata.
    - Upload and store OpenAPI 3.0.3 specs in YAML and JSON format.
@@ -78,12 +77,6 @@ We analyzed leading industry solutions to inform Contract Guard's design:
    - Command-line runner for automated testing and CI gating.
 9. **Protection Metrics & Health Summary:**
    - Real-time metrics on dangerous changes intercepted, consumer blast radius, and active deprecations.
-
-### Deliberately Out-of-Scope (Reasons for Exclusion)
-- **Complex Multi-Tenant RBAC & SSO:** Unnecessary overhead for a local 6-hour evaluation; team names and API headers are sufficient.
-- **Client SDK Auto-generation:** Out of scope for contract registry and verification.
-- **Heavyweight Distributed Databases:** SQLite / in-memory store with JSON persistence ensures zero external dependency friction and instant startup.
-
 ---
 
 ## 5. System Design, Architecture & Data Model
