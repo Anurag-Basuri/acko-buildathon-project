@@ -1,0 +1,6 @@
+# Backend-local ignores
+.env
+.embedded-pg/
+*.log
+tmp-*
+
