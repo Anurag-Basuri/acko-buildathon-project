@@ -59,9 +59,9 @@ let app;
 let policyService;
 let quoteService;
 let claimsService;
-const policyVersions = [];
-const quoteVersions = [];
-const claimsVersions = [];
+let policyVersions = [];
+let quoteVersions = [];
+let claimsVersions = [];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

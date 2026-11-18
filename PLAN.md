@@ -26,6 +26,15 @@ These are the main users that I figured out:
 
 ## 2. Product Owner Questions & Clarifications
 
+| # | Question Asked to Product Owner | Product Owner Clarification & Agreed Decision |
+|---|----------------------------------|-----------------------------------------------|
+| 1 | **How should `x-sunset` dates be interpreted and enforced?** | `x-sunset: 'YYYY-MM-DD'` indicates the deadline after which a deprecated field may be removed. If sunset date is in the future (e.g. `phone` sunsetting `2027-06-30`), removing it is an immediate breaking violation. If sunset date is in the past (e.g. `legacyCode` sunset on `2026-11-01`), removal is expected, but Contract Guard must alert any active consumers still reading it and block uncoordinated deletion. |
+| 2 | **What does `x-internal: true` signify for consumers?** | Marks private service-to-service operations (e.g., `/internal/pricing-cache`). External/client consumers (`partner-portal`, `mobile-app`) must be blocked or warned if they attempt to bind contracts to internal endpoints. Provider modifications to internal endpoints do not notify external consumers. |
+| 3 | **Should Contract Guard completely reject broken specs (e.g., invalid `$ref`)?** | Yes. A spec with unresolvable `$ref` (like `ClaimDocumnt` in `claims-api/2-channel-and-notes.yaml`) is structurally invalid. It must be rejected at ingestion with a clear error pinpointing the broken reference. |
+| 4 | **How should path parameter renames be evaluated (e.g., `/quotes/{id}` vs `/quotes/{quoteId}`)?** | Semantically, both match the route structure, but renaming path parameters breaks consumers who send parameters by name (e.g., `sends: [id]`) or rely on generated SDK signatures. Contract Guard must flag this as a contract break for consumers using `{id}`. |
+| 5 | **Can a team ever bypass a blocked breaking publication?** | By default, breaking changes impacting consumers must be strictly stopped. An override mechanism requires a logged approval reason and approver identity, immediately dispatching high-priority webhooks to affected consumer teams. Unrestricted overrides are deferred pending final PO confirmation. |
+| 6 | **Where must alerts and notifications be sent?** | To the webhook receiver running at `http://localhost:9900` (or `WEBHOOK_PORT`), posting formatted JSON payloads detailing the service, version, impacted teams, and exact breaking changes. |
+
 ---
 
 ## 3. Learnings from Similar Real Products
