@@ -10,6 +10,7 @@
 import { get, post, put, ApiError } from './api.js';
 import {
   el,
+  escapeHtml,
   formatDateTime,
   loadingView,
   emptyView,
@@ -498,18 +499,28 @@ function specsUploadCard(service) {
     validateOut.replaceChildren(loadingView('Validating…'));
     try {
       const result = await post('/specs/validate', { content: contentArea.value });
-      validateOut.replaceChildren(
-        el('div', { class: 'note' },
-          el('span', {}, toneBadge('VALID', 'published')),
-          ` ${result.format.toUpperCase()} ${result.openApiVersion ?? ''} — document is structurally valid.`
-        )
-      );
+      if (result.valid) {
+        validateOut.replaceChildren(
+          el('div', { class: 'note' },
+            el('span', {}, toneBadge('VALID', 'published')),
+            ` ${(result.format ?? '?').toUpperCase()} ${result.openApiVersion ?? ''} — document is structurally valid.`
+          )
+        );
+      } else {
+        const list = result.errors ?? [];
+        const first = list[0]?.message ?? 'the document is not a valid OpenAPI specification';
+        validateOut.replaceChildren(
+          el('div', { class: 'note warn' },
+            el('span', {}, toneBadge('INVALID', 'blocked')),
+            ` ${first}${list.length > 1 ? ` — and ${list.length - 1} more issue(s)` : ''}. Upload will be rejected.`
+          )
+        );
+      }
     } catch (error) {
-      const list = Array.isArray(error.details) ? error.details : [];
       validateOut.replaceChildren(
         el('div', { class: 'note warn' },
-          el('span', {}, toneBadge('INVALID', 'blocked')),
-          ` ${error.message}${list.length ? ` (${list.length} issue(s))` : ''}`
+          el('span', {}, toneBadge('ERROR', 'blocked')),
+          ` ${error.message}`
         )
       );
     }
@@ -577,7 +588,7 @@ async function specsVersionsCard(service) {
   if (!versions.length) {
     return card(`Versions of ${service.name}`, el('p', { class: 'empty-inline' }, 'No versions uploaded yet.'));
   }
-  return card(`Versions of ${service.name} <span class="muted">(chronological)</span>`, dataTable(['Version', 'Status', 'Format', 'Uploaded', 'Actions'], rows));
+  return card(`Versions of ${escapeHtml(service.name)} <span class="muted">(chronological)</span>`, dataTable(['Version', 'Status', 'Format', 'Uploaded', 'Actions'], rows));
 }
 
 // ================================================================== DIFF
@@ -738,8 +749,7 @@ export function consumersView() {
   );
 
   const head = pageHead('Consumer registry', 'Registered consumers and the operations they declare (sends/reads). Import the starter-kit files with one click.');
-  const headEl = head.querySelector('.page-head');
-  headEl.append(headActions);
+  head.append(headActions);
 
   wrap.append(
     head,
@@ -780,7 +790,7 @@ function renderConsumersTable(consumers) {
       detailHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     },
   });
-  return el('div', { class: 'card' }, el('h2', {}, `Registered consumers <span class="muted">(click a row to manage its dependencies)</span>`), table);
+  return el('div', { class: 'card' }, el('h2', { html: 'Registered consumers <span class="muted">(click a row to manage its dependencies)</span>' }), table);
 }
 
 function renderConsumerDetail(consumer) {
@@ -860,7 +870,7 @@ function renderConsumerDetail(consumer) {
   return el(
     'div',
     { class: 'card', style: 'margin-top:16px' },
-    el('h2', {}, `Dependencies of ${consumer.name} <span class="muted">(PUT /api/consumers/:id is an explicit full replacement)</span>`),
+    el('h2', { html: `Dependencies of ${escapeHtml(consumer.name)} <span class="muted">(PUT /api/consumers/:id is an explicit full replacement)</span>` }),
     listHost,
     el('div', { class: 'form', style: 'margin-top:12px' },
       el('div', { class: 'form-row' },
@@ -1188,6 +1198,6 @@ function renderHistory(history) {
     el('span', { class: 'mono' }, attempt.analysisRun ? `${String(attempt.analysisRun.id).slice(0, 8)}…` : '—'),
     el('span', { class: 'mono' }, formatDateTime(attempt.createdAt)),
   ]);
-  return card(`Publish history — ${history.version.versionLabel} <span class="muted">(newest first, both outcomes kept)</span>`,
+  return card(`Publish history — ${escapeHtml(history.version.versionLabel)} <span class="muted">(newest first, both outcomes kept)</span>`,
     dataTable(['Outcome', 'Decision', 'Reason', 'Warnings', 'Analysis run', 'At'], rows));
 }

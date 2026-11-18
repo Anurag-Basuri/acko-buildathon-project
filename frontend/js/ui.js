@@ -159,7 +159,11 @@ export function statCard(label, value, sub = null, valueClass = '') {
 }
 
 export function card(title, ...children) {
-  return el('div', { class: 'card' }, el('h2', {}, title), ...children);
+  // Titles may carry trusted markup (e.g. a muted suffix); user data inside
+  // them must be escaped by the caller with escapeHtml().
+  const heading =
+    typeof title === 'string' && title.includes('<') ? el('h2', { html: title }) : el('h2', {}, title);
+  return el('div', { class: 'card' }, heading, ...children);
 }
 
 // ----------------------------------------------------------------- tables

@@ -272,10 +272,10 @@ export async function getServiceMetrics() {
   }
 
   const attempts = await prisma.publishAttempt.groupBy({
-    by: ['outcome'],
+    by: ['versionId'],
     _count: { _all: true },
   });
-  const attemptCount = attempts.reduce((sum, row) => sum + row._count._all, 0);
+  const attemptsByVersion = new Map(attempts.map((row) => [row.versionId, row._count._all]));
 
   return services.map((service) => {
     const published = service.apiVersions.filter((version) => version.status === 'PUBLISHED');
@@ -305,7 +305,10 @@ export async function getServiceMetrics() {
             affectedConsumers: run.affectedConsumerCount,
           }
         : null,
-      publishAttemptCount: attemptCount,
+      publishAttemptCount: service.apiVersions.reduce(
+        (sum, version) => sum + (attemptsByVersion.get(version.id) ?? 0),
+        0
+      ),
     };
   });
 }
