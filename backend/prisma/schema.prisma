@@ -9,9 +9,10 @@ datasource db {
 
 // Increment 1: Service Registry (Service).
 // Increment 2: Specification Management (ApiVersion).
-// The remaining models from the approved data model (ConsumerDependency,
-// AnalysisRun, CompatibilityChange, ImpactFinding, PublishAttempt) are
-// added in later increments, one per feature module.
+// Increment 5: Consumer Registry and Dependency Management (ConsumerDependency).
+// The remaining models from the approved data model (AnalysisRun,
+// CompatibilityChange, ImpactFinding, PublishAttempt) are added in later
+// increments, one per feature module.
 
 model Service {
   id          String   @id @default(uuid())
@@ -21,7 +22,9 @@ model Service {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  apiVersions ApiVersion[]
+  apiVersions          ApiVersion[]
+  consumerDependencies ConsumerDependency[] @relation("ConsumerDependencyConsumer")
+  providedDependencies ConsumerDependency[] @relation("ConsumerDependencyProvider")
 }
 
 enum SpecFormat {
@@ -55,4 +58,34 @@ model ApiVersion {
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   @@unique([serviceId, versionLabel])
+}
+
+// Increment 5: one declared usage of a provider operation by a consumer.
+// Both consumer and provider are Service records (a service can act as both).
+// The unique constraint prevents accidental duplicate declarations for the
+// same consumer, provider, method and operation path.
+model ConsumerDependency {
+  id                String   @id @default(uuid())
+  consumerServiceId String
+  providerServiceId String
+  // Normalized uppercase HTTP method (GET, POST, ...).
+  method            String
+  // The operation path exactly as the consumer declares it, e.g. /quotes/{id}.
+  path              String
+  // Request field paths the consumer sends, in the starter-kit dot-notation
+  // with array markers (e.g. "vehicle.make", "items[].productId"). Preserved
+  // verbatim — never flattened or discarded.
+  sends             String[]
+  // Response field paths the consumer reads, same representation.
+  reads             String[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  consumer Service @relation("ConsumerDependencyConsumer", fields: [consumerServiceId], references: [id], onDelete: Cascade)
+  provider Service @relation("ConsumerDependencyProvider", fields: [providerServiceId], references: [id], onDelete: Cascade)
+
+  @@unique([consumerServiceId, providerServiceId, method, path])
+  // Provider-side lookups (GET /api/services/:id/consumers); the consumer-side
+  // lookups use the leftmost prefix of the unique index above.
+  @@index([providerServiceId])
 }
