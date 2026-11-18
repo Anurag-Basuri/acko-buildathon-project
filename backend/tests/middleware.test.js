@@ -19,12 +19,13 @@ function fakeRes() {
   };
 }
 
-test('notFoundHandler responds with the 404 envelope', () => {
+test('notFoundHandler responds with the 404 error envelope', () => {
   const req = { method: 'DELETE', path: '/api/missing' };
   const res = fakeRes();
   notFoundHandler(req, res);
   assert.equal(res.statusCode, 404);
   assert.deepEqual(res.body, {
+    success: false,
     error: { code: 'NOT_FOUND', message: 'Cannot DELETE /api/missing' },
   });
 });
@@ -33,6 +34,7 @@ test('errorHandler maps unknown errors to 500 INTERNAL_ERROR', () => {
   const res = fakeRes();
   errorHandler(new Error('boom'), { method: 'GET', path: '/x' }, res);
   assert.equal(res.statusCode, 500);
+  assert.equal(res.body.success, false);
   assert.equal(res.body.error.code, 'INTERNAL_ERROR');
   assert.equal(res.body.error.message, 'boom');
 });
@@ -40,15 +42,16 @@ test('errorHandler maps unknown errors to 500 INTERNAL_ERROR', () => {
 test('errorHandler preserves status, code and details when provided', () => {
   const err = Object.assign(new Error('nope'), {
     status: 409,
-    code: 'DUPLICATE_VERSION',
-    details: ['version 1.0.0 already exists for this service'],
+    code: 'DUPLICATE_SERVICE',
+    details: [{ field: 'name', message: 'already exists' }],
   });
   const res = fakeRes();
   errorHandler(err, { method: 'POST', path: '/x' }, res);
   assert.equal(res.statusCode, 409);
-  assert.equal(res.body.error.code, 'DUPLICATE_VERSION');
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.error.code, 'DUPLICATE_SERVICE');
   assert.deepEqual(res.body.error.details, [
-    'version 1.0.0 already exists for this service',
+    { field: 'name', message: 'already exists' },
   ]);
 });
 
@@ -60,5 +63,6 @@ test('errorHandler maps JSON body parse failures to INVALID_JSON', () => {
   const res = fakeRes();
   errorHandler(err, { method: 'POST', path: '/x' }, res);
   assert.equal(res.statusCode, 400);
+  assert.equal(res.body.success, false);
   assert.equal(res.body.error.code, 'INVALID_JSON');
 });
