@@ -190,12 +190,16 @@ export function validateDeclaredFields(fieldPaths, operation, side) {
       return { path: fieldPath, status: 'not_found' };
     }
     // A field is considered available when it exists in at least one
-    // successful response schema of the operation.
+    // successful response schema of the operation. If none of the
+    // inspectable schemas contains it, it is not found; only schemas that
+    // cannot be inspected at all keep the result "unverifiable".
+    let sawInspectable = false;
     for (const schema of schemas) {
       const { status } = fieldStatusInSchema(tokenizeFieldPath(fieldPath), schema);
       if (status === 'exists') return { path: fieldPath, status };
+      if (status === 'not_found') sawInspectable = true;
     }
-    return { path: fieldPath, status: 'unverifiable' };
+    return { path: fieldPath, status: sawInspectable ? 'not_found' : 'unverifiable' };
   });
 }
 
