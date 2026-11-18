@@ -49,6 +49,12 @@ pnpm-debug.log*
 .pnpm-store/
 .next/
 out/
+dist/
+.vite/
+.cache/
+coverage/
+.nyc_output/
+*.tsbuildinfo
 
 # Environment & Local Configuration
 .env
@@ -60,12 +66,15 @@ out/
 *.sqlite
 *.sqlite3
 *.db
+*.sqlite-journal
+*.db-journal
 data/
 db_data/
 
 # Starter Kit & Test Artifacts
 setup-report-sde.txt
 *.log
+logs/
 
 # Operating System & IDE
 .DS_Store
