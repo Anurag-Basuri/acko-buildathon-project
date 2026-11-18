@@ -215,9 +215,8 @@ after(async () => {
 // --- Error handling ---------------------------------------------------------
 
 test('impact: initial version without a published baseline is a 400 NO_PUBLISHED_BASELINE', async () => {
-  const soloV1 = (
-    await get(`/api/services/${soloService.id}/versions`)
-  ).body.data.versions[0];
+  const versions = (await get(`/api/services/${soloService.id}/versions`)).body.data;
+  const soloV1 = versions[0];
   const { status, body } = await get(`/api/specs/${soloV1.id}/impact`);
   assert.equal(status, 400);
   assert.equal(body.error.code, 'NO_PUBLISHED_BASELINE');
@@ -308,7 +307,9 @@ test('impact: array field removals match declared array paths', async () {
   const { data } = body;
 
   const amountFindings = data.impact.findings.filter(
-    (f) => f.change.fieldPath === 'response.200.premium.breakdown[].amount'
+    (f) =>
+      f.change.fieldPath === 'response.201.premium.breakdown[].amount' ||
+      f.change.fieldPath === 'response.200.premium.breakdown[].amount'
   );
   assert.equal(amountFindings.length, 2); // POST /quotes (201) + GET /quotes/{id} (200)
   for (const finding of amountFindings) {

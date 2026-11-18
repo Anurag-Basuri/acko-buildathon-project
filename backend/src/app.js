@@ -11,7 +11,7 @@ import { errorHandler } from './middleware/error-handler.js';
 // The build-free static frontend (no framework, no build step) lives in
 // <project root>/frontend and is served from the API origin, so the SPA can
 // call /api/* with same-origin fetch.
-const frontendDir = path.resolve(fileURLToPath(new URL('..', import.meta.url)), '..', '..', 'frontend');
+const frontendDir = path.resolve(fileURLToPath(new URL('..', import.meta.url)), '..', 'frontend');
 
 export function createApp() {
   const app = express();
