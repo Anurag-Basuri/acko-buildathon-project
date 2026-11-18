@@ -15,6 +15,7 @@ export function errorHandler(err, req, res, next) {
   const bodyParseFailed = err.type === 'entity.parse.failed';
 
   res.status(status).json({
+    success: false,
     error: {
       code: err.code || (bodyParseFailed ? 'INVALID_JSON' : 'INTERNAL_ERROR'),
       message: bodyParseFailed

@@ -4,10 +4,13 @@ import { env } from '../config/env.js';
 
 export function getHealth(req, res) {
   res.status(200).json({
-    status: 'ok',
-    service: 'contract-guard-api',
-    environment: env.nodeEnv,
-    uptimeSeconds: Math.round(process.uptime() * 10) / 10,
-    timestamp: new Date().toISOString(),
+    success: true,
+    data: {
+      status: 'ok',
+      service: 'contract-guard-api',
+      environment: env.nodeEnv,
+      uptimeSeconds: Math.round(process.uptime() * 10) / 10,
+      timestamp: new Date().toISOString(),
+    },
   });
 }

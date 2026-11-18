@@ -1,4 +1,6 @@
 // Server entrypoint: boots the app and owns the process lifecycle.
+// dotenv loads .env if present; real environment variables always win.
+import 'dotenv/config';
 import app from './app.js';
 import { env } from './config/env.js';
 import prisma from './database/prisma.js';
