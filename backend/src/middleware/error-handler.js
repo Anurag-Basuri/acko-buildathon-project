@@ -23,7 +23,7 @@ export function errorHandler(err, req, res, next) {
         : exposeMessage
           ? err.message || 'Internal server error'
           : 'Internal server error',
-      ...(Array.isArray(err.details) ? { details: err.details } : {}),
+      ...(err.details !== undefined ? { details: err.details } : {}),
     },
   });
 }
