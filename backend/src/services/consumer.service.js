@@ -168,7 +168,7 @@ export async function replaceDependencies(consumerId, dependencies) {
     }));
     if (keep.length > 0) {
       await tx.consumerDependency.deleteMany({
-        where: { consumerServiceId, NOT: { OR: keep } },
+        where: { consumerServiceId: consumerId, NOT: { OR: keep } },
       });
     } else {
       await tx.consumerDependency.deleteMany({ where: { consumerServiceId: consumerId } });

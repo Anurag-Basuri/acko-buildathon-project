@@ -51,6 +51,7 @@ let pg;
 let server;
 let baseUrl;
 let prisma;
+let app;
 
 let policyService;
 let quoteService;
@@ -183,7 +184,15 @@ before(async () => {
   await uploadSpec(quoteService.id, 'v4', quoteSpecs[3]);
 
   claimsV1 = await uploadSpec(claimsService.id, 'v1', claimsSpecs[0]);
-  await uploadSpec(claimsService.id, 'v2', claimsSpecs[1]);
+  // claims v2 fixture carries a deliberately broken $ref (ClaimDocumnt) —
+  // the upload endpoint must reject invalid specifications.
+  const rejected = await postJson('/api/specs/upload', {
+    serviceId: claimsService.id,
+    versionLabel: 'v2',
+    content: claimsSpecs[1],
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.error.code, 'INVALID_SPEC');
   await uploadSpec(claimsService.id, 'v3', claimsSpecs[2]);
   await uploadSpec(claimsService.id, 'v4', claimsSpecs[3]);
 
@@ -373,6 +382,21 @@ test('consumers: malformed id is a 400', async () => {
 });
 
 test('services: GET /api/services/:id/consumers lists grouped consumers of a provider', async () => {
+  // billing-worker's dependency set was cleared by an earlier test; give it
+  // one back so it is visible to the provider-side listing.
+  const redep = await putJson(`/api/consumers/${billingWorker.id}`, {
+    dependencies: [
+      {
+        providerId: quoteService.id,
+        method: 'GET',
+        path: '/quotes/{id}',
+        sends: ['id'],
+        reads: ['quoteId'],
+      },
+    ],
+  });
+  assert.equal(redep.status, 200);
+
   const { status, body } = await get(`/api/services/${quoteService.id}/consumers`);
   assert.equal(status, 200);
   assert.equal(body.data.provider.id, quoteService.id);
@@ -422,9 +446,9 @@ test('import: published quote-api v3 reports the renamed path as an operation mi
 });
 
 test('import: re-importing the same declarations creates no duplicates', async () => {
-  // 10 starter-kit dependencies + 1 seeded earlier (detail-consumer).
+  // 10 starter-kit dependencies + detail-consumer + billing-worker.
   const first = await prisma.consumerDependency.count();
-  assert.equal(first, 11);
+  assert.equal(first, 12);
 
   const { status, body } = await postJson('/api/consumers/import', {});
   assert.equal(status, 200);
@@ -433,7 +457,7 @@ test('import: re-importing the same declarations creates no duplicates', async (
   assert.equal(body.data.consumersCreated, 0);
 
   const second = await prisma.consumerDependency.count();
-  assert.equal(second, 11);
+  assert.equal(second, 12);
 });
 
 test('import: field paths (nested and array notation) are stored verbatim', async () => {
@@ -467,9 +491,14 @@ test('import: per-use validation results against published specs', async () => {
     )
   );
 
-  // POST /quotes: everything validates against quote v3.
-  assert.equal(useByPath.get('/quotes').status, 'validated');
-  assert.equal(useByPath.get('/quotes').issues.length, 0);
+  // POST /quotes: quote v3 renamed premium.breakdown[].amount to .value,
+  // so that declared read is flagged; everything else validates.
+  const quotesUse = useByPath.get('/quotes');
+  assert.equal(quotesUse.status, 'field_mismatches');
+  assert.equal(quotesUse.issues.length, 1);
+  assert.equal(quotesUse.issues[0].kind, 'field');
+  assert.equal(quotesUse.issues[0].side, 'response');
+  assert.equal(quotesUse.issues[0].field, 'premium.breakdown[].amount');
 
   // Claims operations validate against claims v1.
   const claims = useByPath.get('/claims');
@@ -511,7 +540,7 @@ test('import: malformed declarations in the body are reported, not fatal', async
   );
   // The valid consumer was registered and its dependency stored.
   const count = await prisma.consumerDependency.count();
-  assert.equal(count, 12);
+  assert.equal(count, 13);
 });
 
 test('import: unresolved provider references are reported and never created', async () => {
@@ -592,7 +621,7 @@ test('import: an operation absent from the published spec is invalid_operation',
   assert.ok(use.issues.some((issue) => issue.kind === 'operation'));
   // The declaration is preserved (the dependency is stored) but flagged.
   const count = await prisma.consumerDependency.count();
-  assert.equal(count, 14);
+  assert.equal(count, 15);
 });
 
 test('consumers list reflects imported consumers with provider grouping', async () => {

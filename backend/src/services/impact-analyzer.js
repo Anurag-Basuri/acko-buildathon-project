@@ -96,24 +96,39 @@ export function fieldContext(change) {
     // "request[<contentType>]" content-type changes stay operation-level.
     return { side: 'request', kind: relative ? 'field' : 'operation', relative, status: null };
   }
-  if (typeof change.location === 'string' && change.location.startsWith('response.')) {
-    const status = change.location.slice('response.'.length);
+  const locationIsResponse =
+    typeof change.location === 'string' &&
+    (change.location === 'response' || change.location.startsWith('response.'));
+  if (locationIsResponse || (fp && fp.startsWith('response.'))) {
+    // The status comes from the field path when it names one, otherwise
+    // from the location ("response.200", "response.200[application/json]").
+    let status = null;
+    let rest = null; // null = not derivable from the field path
+    if (fp && fp.startsWith('response.')) {
+      const tail = fp.slice('response.'.length);
+      const match = tail.match(/^[^\.\[]+(?:\[[^\]]+\])?/);
+      if (match) {
+        status = match[0];
+        rest = tail.slice(match[0].length).replace(/^\./, '');
+      } else {
+        rest = tail;
+      }
+    }
+    if (!status) status = change.location.slice('response.'.length);
+    if (!status) {
+      return { side: 'operation', kind: 'operation', relative: null, status: null, is2xx: false };
+    }
     const is2xx = status.startsWith('2');
-    if (!fp) {
+    if (rest === null) {
       return { side: 'response', kind: 'operation', relative: null, status, is2xx };
     }
-    if (fp.startsWith('response.')) {
-      let rest = fp.slice('response.'.length);
-      const match = rest.match(/^[^\.\[]+?(?:\[[^\]]+\])?/);
-      if (match) rest = rest.slice(match[0].length).replace(/^\./, '');
-      return {
-        side: 'response',
-        kind: rest ? 'field' : 'operation',
-        relative: rest || null,
-        status,
-        is2xx,
-      };
-    }
+    return {
+      side: 'response',
+      kind: rest ? 'field' : 'operation',
+      relative: rest || null,
+      status,
+      is2xx,
+    };
   }
   return { side: 'operation', kind: 'operation', relative: null, status: null, is2xx: false };
 }
