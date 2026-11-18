@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SpecFormat {
+  YAML
+  JSON
+}
+
+enum VersionStatus {
+  PROPOSED
+  PUBLISHED
+}
+
+enum RunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// UNKNOWN = "uncertain" per the product requirements.
+enum Classification {
+  BREAKING
+  WARNING
+  NON_BREAKING
+  UNKNOWN
+}
+
+enum PublishOutcome {
+  PUBLISHED
+  BLOCKED
+  OVERRIDDEN
+}
+
+model Service {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  owner       String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  apiVersions  ApiVersion[]
+  consumerDeps ConsumerDependency[] @relation("ConsumerService")
+  providerDeps ConsumerDependency[] @relation("ProviderService")
+}
+
+model ApiVersion {
+  id           String        @id @default(uuid())
+  serviceId    String
+  versionLabel String
+  specContent  String
+  parsedSpec   Json
+  format       SpecFormat
+  status       VersionStatus @default(PROPOSED)
+  publishedAt  DateTime?
+  createdAt    DateTime      @default(now())
+
+  service         Service          @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  proposedRuns    AnalysisRun[]    @relation("ProposedVersion")
+  baselineRuns    AnalysisRun[]    @relation("BaselineVersion")
+  publishAttempts PublishAttempt[]
+
+  @@unique([serviceId, versionLabel])
+  @@index([serviceId])
+}
+
+model ConsumerDependency {
+  id                String   @id @default(uuid())
+  consumerServiceId String
+  providerServiceId String
+  method            String
+  path              String
+  sends             String[] @default([])
+  reads             String[] @default([])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  consumerService Service         @relation("ConsumerService", fields: [consumerServiceId], references: [id], onDelete: Cascade)
+  providerService Service         @relation("ProviderService", fields: [providerServiceId], references: [id], onDelete: Cascade)
+  impactFindings  ImpactFinding[]
+
+  @@unique([consumerServiceId, providerServiceId, method, path])
+  @@index([providerServiceId])
+}
+
+model AnalysisRun {
+  id                String    @id @default(uuid())
+  proposedVersionId String
+  baselineVersionId String?
+  status            RunStatus @default(RUNNING)
+  summary           Json?
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+
+  proposedVersion ApiVersion            @relation("ProposedVersion", fields: [proposedVersionId], references: [id], onDelete: Cascade)
+  baselineVersion ApiVersion?           @relation("BaselineVersion", fields: [baselineVersionId], references: [id], onDelete: SetNull)
+  changes         CompatibilityChange[]
+  publishAttempts PublishAttempt[]
+
+  @@index([proposedVersionId])
+}
+
+model CompatibilityChange {
+  id             String         @id @default(uuid())
+  analysisRunId  String
+  changeType     String
+  method         String?
+  path           String?
+  fieldPath      String?
+  classification Classification
+  beforeValue    Json?
+  afterValue     Json?
+  reason         String
+
+  analysisRun    AnalysisRun     @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  impactFindings ImpactFinding[]
+
+  @@index([analysisRunId])
+}
+
+model ImpactFinding {
+  id           String   @id @default(uuid())
+  changeId     String
+  dependencyId String
+  reason       String
+  createdAt    DateTime @default(now())
+
+  change     CompatibilityChange @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  dependency ConsumerDependency  @relation(fields: [dependencyId], references: [id], onDelete: Cascade)
+
+  @@unique([changeId, dependencyId])
+  @@index([dependencyId])
+}
+
+model PublishAttempt {
+  id                String         @id @default(uuid())
+  versionId         String
+  analysisRunId     String?
+  outcome           PublishOutcome
+  reason            String?
+  approver          String?
+  overrideRationale String?
+  createdAt         DateTime       @default(now())
+
+  version     ApiVersion   @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  analysisRun AnalysisRun? @relation(fields: [analysisRunId], references: [id], onDelete: SetNull)
+
+  @@index([versionId])
+}
