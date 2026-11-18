@@ -10,9 +10,9 @@ datasource db {
 // Increment 1: Service Registry (Service).
 // Increment 2: Specification Management (ApiVersion).
 // Increment 5: Consumer Registry and Dependency Management (ConsumerDependency).
-// The remaining models from the approved data model (AnalysisRun,
-// CompatibilityChange, ImpactFinding, PublishAttempt) are added in later
-// increments, one per feature module.
+// Increment 6: Consumer Impact Analysis (AnalysisRun).
+// The remaining models from the approved data model (PublishAttempt) are
+// added in later increments, one per feature module.
 
 model Service {
   id          String   @id @default(uuid())
@@ -25,6 +25,7 @@ model Service {
   apiVersions          ApiVersion[]
   consumerDependencies ConsumerDependency[] @relation("ConsumerDependencyConsumer")
   providedDependencies ConsumerDependency[] @relation("ConsumerDependencyProvider")
+  analysisRuns         AnalysisRun[]        @relation("AnalysisRunService")
 }
 
 enum SpecFormat {
@@ -56,8 +57,59 @@ model ApiVersion {
   updatedAt       DateTime      @updatedAt
 
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  analysisRuns        AnalysisRun[]
+  analysisRunsAsBaseline AnalysisRun[] @relation("AnalysisRunBaseline")
+  publishAttempts     PublishAttempt[]
 
   @@unique([serviceId, versionLabel])
+}
+
+// Increment 6: one completed analysis of a proposed version against its
+// published baseline: semantic comparison + compatibility classification +
+// consumer impact analysis, computed from the consumer dependency
+// declarations registered at analysis time.
+//
+// Runs are immutable and historical: re-running the analysis creates a new
+// row, so later dependency changes do not rewrite past results. The
+// publish flow uses the LATEST run for a version and re-checks its
+// freshness (baseline + dependency fingerprint + content hash) before
+// trusting it.
+model AnalysisRun {
+  id                  String   @id @default(uuid())
+  proposedVersionId   String
+  baselineVersionId   String
+  providerServiceId   String
+  // SHA-256 over the provider's consumer dependency rows at analysis time
+  // (consumer, method, path, sorted sends, sorted reads). The publish flow
+  // recomputes it to detect stale analyses.
+  dependencyFingerprint String
+  // SHA-256 of the proposed version's originalContent (content is immutable;
+  // stored for completeness of the freshness check).
+  specContentHash     String
+  createdAt           DateTime @default(now())
+
+  // Compatibility classification counts for this baseline -> proposed jump.
+  countsTotal         Int
+  countsBreaking      Int
+  countsNonBreaking   Int
+  countsUnknown       Int
+  // Impact summary counts (affected consumers/dependencies/changes).
+  affectedConsumerCount    Int
+  affectedDependencyCount  Int
+  affectedChangeCount      Int
+
+  // Full classified change list (comparator fields + classification,
+  // ruleId, reason) and the impact result ({ summary, findings }).
+  classifiedChanges Json
+  impact          Json
+
+  proposedVersion ApiVersion @relation(fields: [proposedVersionId], references: [id], onDelete: Cascade)
+  baselineVersion ApiVersion @relation("AnalysisRunBaseline", fields: [baselineVersionId], references: [id], onDelete: Cascade)
+  service         Service    @relation("AnalysisRunService", fields: [providerServiceId], references: [id], onDelete: Cascade)
+  publishAttempts PublishAttempt[]
+
+  @@index([proposedVersionId, createdAt])
+  @@index([providerServiceId, createdAt])
 }
 
 // Increment 5: one declared usage of a provider operation by a consumer.
@@ -88,4 +140,37 @@ model ConsumerDependency {
   // Provider-side lookups (GET /api/services/:id/consumers); the consumer-side
   // lookups use the leftmost prefix of the unique index above.
   @@index([providerServiceId])
+}
+
+// Increment 7: Publishing Governance (PublishAttempt).
+// Every publish decision — allowed or blocked — is persisted, so the history
+// is never rewritten and any past decision is explainable from its record.
+enum PublishOutcome {
+  PUBLISHED
+  BLOCKED
+}
+
+model PublishAttempt {
+  id        String @id @default(uuid())
+  versionId String
+  // The AnalysisRun the decision was based on. Null when the decision was
+  // made without/without a usable analysis (invalid specification, initial
+  // version, missing analysis).
+  analysisRunId String?
+  outcome     PublishOutcome
+  // Plain-language explanation of the decision.
+  reason      String
+  // Warnings shown to the caller (e.g. breaking change with no registered
+  // consumer impact). JSON array of strings.
+  warnings     Json @default("[]")
+  // Machine-readable decision record: blocker codes, classification counts,
+  // affected consumers, freshness results. JSON object.
+  decisionDetails Json @default("{}")
+  createdAt     DateTime @default(now())
+
+  version     ApiVersion   @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  analysisRun AnalysisRun? @relation(fields: [analysisRunId], references: [id], onDelete: SetNull)
+
+  @@index([versionId, createdAt])
+  @@index([createdAt])
 }
