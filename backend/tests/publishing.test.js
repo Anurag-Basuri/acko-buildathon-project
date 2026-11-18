@@ -461,13 +461,6 @@ test('publish: breaking changes without registered impact publish WITH a warning
 // --- Scenario 9: clean initial version ---------------------------------------
 
 test('publish: a clean initial version publishes without any comparison', async () => {
-  const { status, body } = await publish(versions.solo.id === undefined ? 'nope' : null);
-  void status;
-  void body;
-  // (placeholder kept out; real assertion below)
-});
-
-test('publish: a clean initial version publishes without any comparison (real)', async () => {
   const soloVersion = await prisma.apiVersion.findFirst({
     where: { serviceId: services.solo.id },
   });
