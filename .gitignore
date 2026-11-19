@@ -74,6 +74,7 @@ db_data/
 # Starter Kit & Test Artifacts
 setup-report-sde.txt
 *.log
+*.out
 logs/
 
 # Operating System & IDE

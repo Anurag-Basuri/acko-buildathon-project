@@ -12,6 +12,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import EmbeddedPostgres from 'embedded-postgres';
+import { killOrphanedEmbeddedPostgres } from './helpers/postgres-cleanup.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -204,21 +205,39 @@ before(async () => {
 });
 
 after(async () => {
+  // Time-bounded, self-diagnosing teardown. Every step gets a hard deadline;
+  // if one stalls, the hook names it and forces an exit so a stuck child
+  // process can never hang the whole `node --test` run.
   let teardownFailed = false;
+  const withDeadline = (label, promise, ms) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
   try {
     if (server) {
+      // closeAllConnections drops undici keep-alive sockets, which would
+      // otherwise keep server.close() waiting forever.
       server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
+      await withDeadline('server.close', new Promise((resolve) => server.close(resolve)), 10_000);
     }
-    if (prisma) await prisma.$disconnect();
+    if (prisma) await withDeadline('prisma.$disconnect', prisma.$disconnect(), 10_000);
+    if (pg) await withDeadline('pg.stop', pg.stop(), 20_000);
     if (pg) {
-      await Promise.race([
-        pg.stop(),
-        sleep(15_000).then(() => {
-          throw new Error('embedded postgres did not stop within 15s');
-        }),
-      ]);
+      // Windows: taskkill can leave postgres forkchild workers behind; the
+      // orphans hold the stdio pipes and keep this process alive.
+      killOrphanedEmbeddedPostgres();
     }
+    console.error('[consumers.test] teardown complete');
   } catch (err) {
     teardownFailed = true;
     console.error('[consumers.test] teardown error:', err.message);
@@ -362,11 +381,11 @@ test('consumers: GET /api/consumers/:id returns the consumer with its dependenci
 
   const fetched = await get(`/api/consumers/${id}`);
   assert.equal(fetched.status, 200);
-  assert.equal(fetched.data.name, 'detail-consumer');
-  assert.equal(fetched.data.uses.length, 1);
-  assert.equal(fetched.data.uses[0].path, '/policies/{policyId}');
-  assert.deepEqual(fetched.data.uses[0].reads, ['policyId', 'status']);
-  assert.deepEqual(fetched.data.consumedBy, []);
+  assert.equal(fetched.body.data.name, 'detail-consumer');
+  assert.equal(fetched.body.data.uses.length, 1);
+  assert.equal(fetched.body.data.uses[0].path, '/policies/{policyId}');
+  assert.deepEqual(fetched.body.data.uses[0].reads, ['policyId', 'status']);
+  assert.deepEqual(fetched.body.data.consumedBy, []);
 });
 
 test('consumers: unknown consumer id is a 404', async () => {
@@ -382,7 +401,7 @@ test('consumers: malformed id is a 400', async () => {
 });
 
 test('services: GET /api/services/:id/consumers lists grouped consumers of a provider', async () => {
-  // billing-worker's dependency set was cleared by an earlier test; give it
+  // rate-limiter's dependency set was cleared by an earlier test; give it
   // one back so it is visible to the provider-side listing.
   const redep = await putJson(`/api/consumers/${billingWorker.id}`, {
     dependencies: [
@@ -400,9 +419,9 @@ test('services: GET /api/services/:id/consumers lists grouped consumers of a pro
   const { status, body } = await get(`/api/services/${quoteService.id}/consumers`);
   assert.equal(status, 200);
   assert.equal(body.data.provider.id, quoteService.id);
-  // billing-worker still depends on quote-api (GET /quotes/{id}).
+  // rate-limiter still depends on quote-api (GET /quotes/{id}).
   assert.equal(body.data.consumers.length, 1);
-  assert.equal(body.data.consumers[0].name, 'billing-worker');
+  assert.equal(body.data.consumers[0].name, 'rate-limiter');
   assert.equal(body.data.consumers[0].dependencies.length, 1);
   assert.equal(body.data.consumers[0].dependencies[0].method, 'GET');
 });
@@ -442,7 +461,8 @@ test('import: published quote-api v3 reports the renamed path as an operation mi
   const report = await prisma.consumerDependency.findMany({
     where: { providerServiceId: quoteService.id, path: { startsWith: '/quotes/{id}' } },
   });
-  assert.equal(report.length, 2); // mobile-app + notifications-svc
+  // rate-limiter (re-declared above) + mobile-app + notifications-svc.
+  assert.equal(report.length, 3);
 });
 
 test('import: re-importing the same declarations creates no duplicates', async () => {
@@ -629,13 +649,13 @@ test('consumers list reflects imported consumers with provider grouping', async 
   assert.equal(status, 200);
   const names = body.data.map((consumer) => consumer.name).sort();
   assert.deepEqual(names, [
-    'billing-worker',
     'detail-consumer',
     'ledger-client',
     'mobile-app',
     'notifications-svc',
     'partner-portal',
     'payments-svc',
+    'rate-limiter',
     'spec-phantom',
     'valid-importer',
   ]);

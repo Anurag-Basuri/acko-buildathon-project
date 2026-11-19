@@ -16,6 +16,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import EmbeddedPostgres from 'embedded-postgres';
+import { killOrphanedEmbeddedPostgres } from './helpers/postgres-cleanup.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -272,21 +273,39 @@ before(async () => {
 });
 
 after(async () => {
+  // Time-bounded, self-diagnosing teardown. Every step gets a hard deadline;
+  // if one stalls, the hook names it and forces an exit so a stuck child
+  // process can never hang the whole `node --test` run.
   let teardownFailed = false;
+  const withDeadline = (label, promise, ms) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
   try {
     if (server) {
+      // closeAllConnections drops undici keep-alive sockets, which would
+      // otherwise keep server.close() waiting forever.
       server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
+      await withDeadline('server.close', new Promise((resolve) => server.close(resolve)), 10_000);
     }
-    if (prisma) await prisma.$disconnect();
+    if (prisma) await withDeadline('prisma.$disconnect', prisma.$disconnect(), 10_000);
+    if (pg) await withDeadline('pg.stop', pg.stop(), 20_000);
     if (pg) {
-      await Promise.race([
-        pg.stop(),
-        sleep(15_000).then(() => {
-          throw new Error('embedded postgres did not stop within 15s');
-        }),
-      ]);
+      // Windows: taskkill can leave postgres forkchild workers behind; the
+      // orphans hold the stdio pipes and keep this process alive.
+      killOrphanedEmbeddedPostgres();
     }
+    console.error('[publishing.test] teardown complete');
   } catch (err) {
     teardownFailed = true;
     console.error('[publishing.test] teardown error:', err.message);

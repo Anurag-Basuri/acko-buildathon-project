@@ -64,54 +64,61 @@ export function evaluatePublishingDecision({
   declarationIssues = [],
   policy = PUBLISH_POLICY,
 }) {
-  const decisionDetails = { policy: { ...policy } };
+  // Accumulating machine-readable audit record. Every decision embeds the
+  // decision code so persisted attempts are self-describing.
+  const details = { policy: { ...policy } };
+
+  const finish = (outcome, code, reason, warnings, extra = {}) => ({
+    outcome,
+    code,
+    reason,
+    warnings,
+    decisionDetails: { code, ...details, ...extra },
+  });
 
   // Rule A: invalid specifications never publish.
   if (!specValid) {
-    return {
-      outcome: 'BLOCKED',
-      code: 'INVALID_SPECIFICATION',
-      reason: 'The stored specification is not a valid OpenAPI document and can never be published.',
-      warnings: [],
-      decisionDetails,
-    };
+    return finish(
+      'BLOCKED',
+      'INVALID_SPECIFICATION',
+      'The stored specification is not a valid OpenAPI document and can never be published.',
+      []
+    );
   }
 
   // Rule H: initial version — no baseline comparison is fabricated; the
   // existing consumer declarations are checked against the new operation set.
   if (isInitialVersion) {
-    decisionDetails.declarationIssues = declarationIssues;
+    details.declarationIssues = declarationIssues;
+    const warnings = declarationIssues.map(
+      (issue) => `${issue.consumer} (${issue.operation}): ${issue.message}`
+    );
     if (declarationIssues.length > 0 && policy.initialVersionDeclarationMismatch === 'block') {
-      return {
-        outcome: 'BLOCKED',
-        code: 'INITIAL_DECLARATION_MISMATCH',
-        reason: 'Registered consumer declarations do not match this initial specification.',
-        warnings: declarationIssues.map((issue) => `${issue.consumer} (${issue.operation}): ${issue.message}`),
-        decisionDetails,
-      };
+      return finish(
+        'BLOCKED',
+        'INITIAL_DECLARATION_MISMATCH',
+        'Registered consumer declarations do not match this initial specification.',
+        warnings
+      );
     }
-    return {
-      outcome: 'PUBLISHED',
-      code: 'INITIAL_VERSION_PUBLISHED',
-      reason:
-        declarationIssues.length > 0
-          ? 'Initial API version published; registered consumer declarations were checked and mismatches are reported as warnings.'
-          : 'Initial API version published; no baseline comparison required.',
-      warnings: declarationIssues.map((issue) => `${issue.consumer} (${issue.operation}): ${issue.message}`),
-      decisionDetails,
-    };
+    return finish(
+      'PUBLISHED',
+      'INITIAL_VERSION_PUBLISHED',
+      declarationIssues.length > 0
+        ? 'Initial API version published; registered consumer declarations were checked and mismatches are reported as warnings.'
+        : 'Initial API version published; no baseline comparison required.',
+      warnings
+    );
   }
 
   // Rule B: a completed analysis must exist.
   if (policy.requireCompletedAnalysis && !analysisRun) {
-    return {
-      outcome: 'BLOCKED',
-      code: 'ANALYSIS_NOT_COMPLETED',
-      reason:
-        'Semantic comparison, compatibility classification and consumer impact analysis have not been completed for this version. Run GET /api/specs/:id/impact first.',
-      warnings: [],
-      decisionDetails,
-    };
+    return finish(
+      'BLOCKED',
+      'ANALYSIS_NOT_COMPLETED',
+      'Semantic comparison, compatibility classification and consumer impact analysis have not been completed for this version. Run GET /api/specs/:id/impact first.',
+      []
+    );
   }
 
   // Rule C: freshness — the analysis must still describe the current state.
@@ -119,58 +126,51 @@ export function evaluatePublishingDecision({
   if (analysisRun.freshness?.baselineStale) staleness.push('published baseline changed');
   if (analysisRun.freshness?.dependenciesStale) staleness.push('consumer dependency declarations changed');
   if (analysisRun.freshness?.contentStale) staleness.push('specification content changed');
-  decisionDetails.freshness = analysisRun.freshness;
-  decisionDetails.counts = analysisRun.counts;
+  details.freshness = analysisRun.freshness;
+  details.counts = analysisRun.counts;
   if (staleness.length > 0 && policy.requireFreshAnalysis) {
-    return {
-      outcome: 'BLOCKED',
-      code: 'STALE_ANALYSIS',
-      reason: `The completed analysis is stale: ${staleness.join('; ')}. Run GET /api/specs/:id/impact again to recompute the analysis against the current state.`,
-      warnings: [],
-      decisionDetails: {
-        ...decisionDetails,
-        staleness,
-        analysisRunId: analysisRun.id,
-      },
-    };
+    return finish(
+      'BLOCKED',
+      'STALE_ANALYSIS',
+      `The completed analysis is stale: ${staleness.join('; ')}. Run GET /api/specs/:id/impact again to recompute the analysis against the current state.`,
+      [],
+      { staleness, analysisRunId: analysisRun.id }
+    );
   }
 
   // Rule G: UNKNOWN changes block until reviewed.
   const unknownCount = analysisRun.counts?.unknown ?? 0;
   if (unknownCount > 0 && policy.blockOnUnknownChanges) {
-    decisionDetails.unknownChanges = analysisRun.unknownChanges ?? [];
-    return {
-      outcome: 'BLOCKED',
-      code: 'UNKNOWN_CHANGES',
-      reason: `${unknownCount} change(s) are classified UNKNOWN and require manual review before publication. UNKNOWN changes are never treated as NON_BREAKING.`,
-      warnings: [],
-      decisionDetails,
-    };
+    details.unknownChanges = analysisRun.unknownChanges ?? [];
+    return finish(
+      'BLOCKED',
+      'UNKNOWN_CHANGES',
+      `${unknownCount} change(s) are classified UNKNOWN and require manual review before publication. UNKNOWN changes are never treated as NON_BREAKING.`,
+      []
+    );
   }
 
   // Rule D / F: breaking changes and their registered impact.
   const breakingCount = analysisRun.counts?.breaking ?? 0;
   const affected = analysisRun.breakingAffectedConsumers ?? [];
-  decisionDetails.breakingAffectedConsumers = affected;
+  details.breakingAffectedConsumers = affected;
   if (breakingCount > 0 && affected.length > 0 && policy.blockBreakingWithAffectedConsumers) {
-    return {
-      outcome: 'BLOCKED',
-      code: 'BREAKING_CHANGES_AFFECT_CONSUMERS',
-      reason: `${breakingCount} breaking change(s) affect ${affected.length} registered consumer(s): ${affected
+    return finish(
+      'BLOCKED',
+      'BREAKING_CHANGES_AFFECT_CONSUMERS',
+      `${breakingCount} breaking change(s) affect ${affected.length} registered consumer(s): ${affected
         .map((consumer) => consumer.name)
         .join(', ')}. Review the impact analysis before publishing.`,
-      warnings: [],
-      decisionDetails,
-    };
+      []
+    );
   }
   if (breakingCount > 0 && policy.breakingWithoutRegisteredImpact === 'block') {
-    return {
-      outcome: 'BLOCKED',
-      code: 'BREAKING_CHANGES_NO_REVIEW',
-      reason: `${breakingCount} breaking change(s) exist and no review exemption is configured (policy: blockBreakingWithAffectedConsumers / breakingWithoutRegisteredImpact=block).`,
-      warnings: [],
-      decisionDetails,
-    };
+    return finish(
+      'BLOCKED',
+      'BREAKING_CHANGES_NO_REVIEW',
+      `${breakingCount} breaking change(s) exist and no review exemption is configured (policy: blockBreakingWithAffectedConsumers / breakingWithoutRegisteredImpact=block).`,
+      []
+    );
   }
 
   // Rule E (+ F warning): publish.
@@ -181,16 +181,14 @@ export function evaluatePublishingDecision({
         'This is NOT guaranteed safe: the consumer registry may be incomplete.'
     );
   }
-  return {
-    outcome: 'PUBLISHED',
-    code: 'ALL_CHECKS_PASSED',
-    reason:
-      breakingCount > 0
-        ? 'Publication allowed: no UNKNOWN changes, and the breaking changes have no matching registered consumer impact (warning issued).'
-        : 'All publishing checks passed.',
-    warnings,
-    decisionDetails,
-  };
+  return finish(
+    'PUBLISHED',
+    'ALL_CHECKS_PASSED',
+    breakingCount > 0
+      ? 'Publication allowed: no UNKNOWN changes, and the breaking changes have no matching registered consumer impact (warning issued).'
+      : 'All publishing checks passed.',
+    warnings
+  );
 }
 
 export default evaluatePublishingDecision;

@@ -12,6 +12,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import EmbeddedPostgres from 'embedded-postgres';
+import { killOrphanedEmbeddedPostgres } from './helpers/postgres-cleanup.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -147,10 +148,14 @@ before(async () => {
   await prisma.service.deleteMany();
 
   // Providers with fixture histories; policy v1 and quote v1 published.
+  // claims-api exists (with no spec) only so the starter-kit declarations
+  // that reference it resolve — it has no version uploads in this suite.
   const policyCreated = await postJson('/api/services', { name: 'policy-api', owner: 'Policy Team' });
   policyService = policyCreated.body.data;
   const quoteCreated = await postJson('/api/services', { name: 'quote-api', owner: 'Quotes Team' });
   quoteService = quoteCreated.body.data;
+  const claimsCreated = await postJson('/api/services', { name: 'claims-api', owner: 'Claims Team' });
+  void claimsCreated;
   const soloCreated = await postJson('/api/services', { name: 'solo-api', owner: 'Solo Team' });
   soloService = soloCreated.body.data;
 
@@ -190,21 +195,39 @@ before(async () => {
 });
 
 after(async () => {
+  // Time-bounded, self-diagnosing teardown. Every step gets a hard deadline;
+  // if one stalls, the hook names it and forces an exit so a stuck child
+  // process can never hang the whole `node --test` run.
   let teardownFailed = false;
+  const withDeadline = (label, promise, ms) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
   try {
     if (server) {
+      // closeAllConnections drops undici keep-alive sockets, which would
+      // otherwise keep server.close() waiting forever.
       server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
+      await withDeadline('server.close', new Promise((resolve) => server.close(resolve)), 10_000);
     }
-    if (prisma) await prisma.$disconnect();
+    if (prisma) await withDeadline('prisma.$disconnect', prisma.$disconnect(), 10_000);
+    if (pg) await withDeadline('pg.stop', pg.stop(), 20_000);
     if (pg) {
-      await Promise.race([
-        pg.stop(),
-        sleep(15_000).then(() => {
-          throw new Error('embedded postgres did not stop within 15s');
-        }),
-      ]);
+      // Windows: taskkill can leave postgres forkchild workers behind; the
+      // orphans hold the stdio pipes and keep this process alive.
+      killOrphanedEmbeddedPostgres();
     }
+    console.error('[impact.test] teardown complete');
   } catch (err) {
     teardownFailed = true;
     console.error('[impact.test] teardown error:', err.message);
@@ -265,11 +288,12 @@ test('impact: a parameter rename produces UNKNOWN findings for consumers sending
     assert.equal(finding.dependency.direction, 'SENDS');
     assert.equal(finding.dependency.declaredFieldPath, 'id');
   }
-  // partner-portal declares an operation, but an unaffected one.
-  assert.deepEqual(data.impact.summary.noMatchingDeclaration.consumers.map((c) => c.name), [
-    'partner-portal',
-    'payments-svc',
-  ]);
+  // partner-portal declares POST /quotes only, an unaffected operation.
+  // (payments-svc consumes policy-api, so it is outside this provider's scope.)
+  assert.deepEqual(
+    data.impact.summary.noMatchingDeclaration.consumers.map((c) => c.name),
+    ['partner-portal']
+  );
 });
 
 test('impact: removed response fields produce BREAKING findings for readers only', async () => {
@@ -300,30 +324,40 @@ test('impact: removed response fields produce BREAKING findings for readers only
   assert.equal(data.impact.summary.affectedConsumerCount, 1);
 });
 
-test('impact: array field removals match declared array paths', async () {
+test('impact: array field removals match declared array paths', async () => {
   // quote v3 (baseline v1) removes premium.breakdown[].amount.
   const { status, body } = await get(`/api/specs/${quoteVersions[2].id}/impact`);
   assert.equal(status, 200, body);
   const { data } = body;
 
-  const amountFindings = data.impact.findings.filter(
-    (f) =>
-      f.change.fieldPath === 'response.201.premium.breakdown[].amount' ||
-      f.change.fieldPath === 'response.200.premium.breakdown[].amount'
+  // The removal exists on both operations, but only the one a consumer
+  // actually declares the field for produces a finding: mobile-app reads
+  // premium.breakdown[].amount on POST /quotes only (its GET /quotes/{id}
+  // declaration reads quoteId, status and premium.total).
+  const removalChanges = data.changes.filter((change) =>
+    [
+      'response.201.premium.breakdown[].amount',
+      'response.200.premium.breakdown[].amount',
+    ].includes(change.fieldPath)
   );
-  assert.equal(amountFindings.length, 2); // POST /quotes (201) + GET /quotes/{id} (200)
+  assert.equal(removalChanges.length, 2); // POST /quotes (201) + GET /quotes/{id} (200)
+
+  const amountFindings = data.impact.findings.filter(
+    (f) => f.change.fieldPath === 'response.201.premium.breakdown[].amount'
+  );
+  assert.equal(amountFindings.length, 1); // only the declared 201 operation
   for (const finding of amountFindings) {
     assert.equal(finding.consumer.name, 'mobile-app');
     assert.deepEqual(finding.dependency.matchedDeclaredFields, ['premium.breakdown[].amount']);
     assert.equal(finding.change.classification, 'BREAKING');
   }
 
-  // partner-portal declares the operations but does not read .amount.
+  // partner-portal declares POST /quotes but never reads .amount, so it has
+  // no findings. Every registered quote-api consumer declares at least one
+  // affected operation, so the no-matching list is empty.
   const partnerFindings = data.impact.findings.filter((f) => f.consumer.name === 'partner-portal');
   assert.equal(partnerFindings.length, 0);
-  assert.ok(
-    data.impact.summary.noMatchingDeclaration.consumers.some((c) => c.name === 'partner-portal')
-  );
+  assert.deepEqual(data.impact.summary.noMatchingDeclaration.consumers, []);
 });
 
 test('impact: the result is deterministic across repeated calls', async () => {

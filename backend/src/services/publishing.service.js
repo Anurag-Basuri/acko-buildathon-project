@@ -150,7 +150,9 @@ export async function publishVersion(versionId, { policy = PUBLISH_POLICY } = {}
   const result = await prisma.$transaction(async (tx) => {
     // Serialize publication decisions per provider service. The lock is
     // released automatically when the transaction commits or rolls back.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${LOCK_PREFIX + version.serviceId}))`;
+    // $executeRaw (not $queryRaw): pg_advisory_xact_lock returns VOID, so
+    // there is no result row to deserialize.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${LOCK_PREFIX + version.serviceId}))`;
 
     // Re-read state inside the transaction (concurrent publishes may have
     // changed it while we waited for the lock).
